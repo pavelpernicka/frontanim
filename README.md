@@ -1,0 +1,2 @@
+# frontanim
+POC of predicting atmospheric front placement from model data using ML. Project includes usefull tools to cenvert synoptic analysis images from Czech Hydrometeorological Instutute to geotiffs and geojson.
