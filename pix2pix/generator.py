@@ -1,127 +1,100 @@
 import torch
-from torch import nn
-
-
-class Generator(nn.Module):
-    def __init__(self):
-        super(Generator, self).__init__()
-
-        # Encoder Block: C64-C128-C256-C512-C512-C512-C512-C512
-        self.e1 = self.define_encoder_block(3, 64, batchnorm=False)
-        self.e2 = self.define_encoder_block(64, 128)
-        self.e3 = self.define_encoder_block(128, 256)
-        self.e4 = self.define_encoder_block(256, 512)
-        self.e5 = self.define_encoder_block(512, 512)
-        self.e6 = self.define_encoder_block(512, 512)
-        self.e7 = self.define_encoder_block(512, 512)
-
-        # bottlenech, no batch norm, and ReLU
-        self.b = nn.Conv2d(512, 512, (4, 4), stride=(2, 2), padding=1)
-        nn.init.normal_(self.b.weight, mean=0.0, std=0.02)
-        self.actb = nn.ReLU(inplace=True)
-
-        # Decoder block: CD512-CD1024-CD1024-C1024-C1024-C512-C256-C128
-        self.d1 = self.define_decoder_block(512, 512)
-        self.act1 = nn.ReLU(inplace=True)
-        self.d2 = self.define_decoder_block(1024, 512)
-        self.act2 = nn.ReLU(inplace=True)
-        self.d3 = self.define_decoder_block(1024, 512)
-        self.act3 = nn.ReLU(inplace=True)
-        self.d4 = self.define_decoder_block(1024, 512, dropout=False)
-        self.act4 = nn.ReLU(inplace=True)
-        self.d5 = self.define_decoder_block(1024, 256, dropout=False)
-        self.act5 = nn.ReLU(inplace=True)
-        self.d6 = self.define_decoder_block(512, 128, dropout=False)
-        self.act6 = nn.ReLU(inplace=True)
-        self.d7 = self.define_decoder_block(256, 64, dropout=False)
-        self.act7 = nn.ReLU(inplace=True)
-
-        self.d8 = nn.ConvTranspose2d(
-            128, 3, (4, 4), stride=(2, 2), padding=1, bias=False
-        )
-        nn.init.normal_(self.d8.weight, mean=0.0, std=0.02)
-        self.act8 = nn.Tanh()
+class ConvBlock(torch.nn.Module):
+    def __init__(self, input_size, output_size, kernel_size=4, stride=2, padding=1, activation=True, batch_norm=True):
+        super(ConvBlock, self).__init__()
+        self.conv = torch.nn.Conv2d(input_size, output_size, kernel_size, stride, padding)
+        self.activation = activation
+        self.lrelu = torch.nn.LeakyReLU(0.2, True)
+        self.batch_norm = batch_norm
+        self.bn = torch.nn.BatchNorm2d(output_size)
 
     def forward(self, x):
-        xe1 = self.e1(x)
-        xe2 = self.e2(xe1)
-        xe3 = self.e3(xe2)
-        xe4 = self.e4(xe3)
-        xe5 = self.e5(xe4)
-        xe6 = self.e6(xe5)
-        xe7 = self.e7(xe6)
-        b1 = self.actb(self.b(xe7))
+        if self.activation:
+            out = self.conv(self.lrelu(x))
+        else:
+            out = self.conv(x)
 
-        xd8 = self.act1(torch.cat((self.d1(b1), xe7), dim=1))
-        xd9 = self.act2(torch.cat((self.d2(xd8), xe6), dim=1))
-        xd10 = self.act3(torch.cat((self.d3(xd9), xe5), dim=1))
-        xd11 = self.act4(torch.cat((self.d4(xd10), xe4), dim=1))
-        xd12 = self.act5(torch.cat((self.d5(xd11), xe3), dim=1))
-        xd13 = self.act6(torch.cat((self.d6(xd12), xe2), dim=1))
-        xd14 = self.act7(torch.cat((self.d7(xd13), xe1), dim=1))
+        if self.batch_norm:
+            return self.bn(out)
+        else:
+            return out
 
-        xd15 = self.d8(xd14)
-        out_image = self.act8(xd15)
-        return xd15
+class DeconvBlock(torch.nn.Module):
+    def __init__(self, input_size, output_size, kernel_size=4, stride=2, padding=1, batch_norm=True, dropout=False):
+        super(DeconvBlock, self).__init__()
+        self.deconv = torch.nn.ConvTranspose2d(input_size, output_size, kernel_size, stride, padding)
+        self.bn = torch.nn.BatchNorm2d(output_size)
+        self.drop = torch.nn.Dropout(0.5)
+        self.relu = torch.nn.ReLU(True)
+        self.batch_norm = batch_norm
+        self.dropout = dropout
 
-    def define_encoder_block(self, in_chan, n_filters, batchnorm=True):
-        """Defines an encoder block for the Pix2Pix GAN.
-        Args:
-             in_chan: The number of input channels.
-             n_filters: The number of output channels.
-             batchnorm: Whether to use batch normalization.
+    def forward(self, x):
+        if self.batch_norm:
+            out = self.bn(self.deconv(self.relu(x)))
+        else:
+            out = self.deconv(self.relu(x))
 
-        Returns:
-             The encoder block.
-        """
-        # Create a list to store the layers of the encoder block
-        layers = []
+        if self.dropout:
+            return self.drop(out)
+        else:
+            return out
+            
+class Generator(torch.nn.Module):
+    def __init__(self, input_dim=3, num_filter=64, output_dim=3):
+        super(Generator, self).__init__()
 
-        # Add the convolutional layer with the specified number of in channels and out channels.
-        conv_layer = nn.Conv2d(
-            in_chan, n_filters, kernel_size=4, stride=2, padding=1, bias=False
-        )
-        # also initialize the weight of the convulation layer.
-        nn.init.normal_(conv_layer.weight, mean=0.0, std=0.02)
-        layers.append(conv_layer)
+        # Encoder
+        self.conv1 = ConvBlock(input_dim, num_filter, activation=False, batch_norm=False)
+        self.conv2 = ConvBlock(num_filter, num_filter * 2)
+        self.conv3 = ConvBlock(num_filter * 2, num_filter * 4)
+        self.conv4 = ConvBlock(num_filter * 4, num_filter * 8)
+        self.conv5 = ConvBlock(num_filter * 8, num_filter * 8)
+        self.conv6 = ConvBlock(num_filter * 8, num_filter * 8)
+        self.conv7 = ConvBlock(num_filter * 8, num_filter * 8)
+        self.conv8 = ConvBlock(num_filter * 8, num_filter * 8, batch_norm=False)
+        # Decoder
+        self.deconv1 = DeconvBlock(num_filter * 8, num_filter * 8, dropout=True)
+        self.deconv2 = DeconvBlock(num_filter * 8 * 2, num_filter * 8, dropout=True)
+        self.deconv3 = DeconvBlock(num_filter * 8 * 2, num_filter * 8, dropout=True)
+        self.deconv4 = DeconvBlock(num_filter * 8 * 2, num_filter * 8)
+        self.deconv5 = DeconvBlock(num_filter * 8 * 2, num_filter * 4)
+        self.deconv6 = DeconvBlock(num_filter * 4 * 2, num_filter * 2)
+        self.deconv7 = DeconvBlock(num_filter * 2 * 2, num_filter)
+        self.deconv8 = DeconvBlock(num_filter * 2, output_dim, batch_norm=False)
 
-        # Conditionally add batch normalization because it does not require every encoder block
-        if batchnorm:
-            layers.append(nn.BatchNorm2d(n_filters))
+    def forward(self, x):
+        # Encoder
+        enc1 = self.conv1(x)
+        enc2 = self.conv2(enc1)
+        enc3 = self.conv3(enc2)
+        enc4 = self.conv4(enc3)
+        enc5 = self.conv5(enc4)
+        enc6 = self.conv6(enc5)
+        enc7 = self.conv7(enc6)
+        enc8 = self.conv8(enc7)
+        # Decoder with skip-connections
+        dec1 = self.deconv1(enc8)
+        dec1 = torch.cat([dec1, enc7], 1)
+        dec2 = self.deconv2(dec1)
+        dec2 = torch.cat([dec2, enc6], 1)
+        dec3 = self.deconv3(dec2)
+        dec3 = torch.cat([dec3, enc5], 1)
+        dec4 = self.deconv4(dec3)
+        dec4 = torch.cat([dec4, enc4], 1)
+        dec5 = self.deconv5(dec4)
+        dec5 = torch.cat([dec5, enc3], 1)
+        dec6 = self.deconv6(dec5)
+        dec6 = torch.cat([dec6, enc2], 1)
+        dec7 = self.deconv7(dec6)
+        dec7 = torch.cat([dec7, enc1], 1)
+        dec8 = self.deconv8(dec7)
+        out = torch.nn.Tanh()(dec8)
+        return out
 
-        # Add the LeakyReLU activation
-        layers.append(nn.LeakyReLU(0.2))
-
-        # Create a sequential block using the list of layers
-        encoder_block = nn.Sequential(*layers)
-
-        return encoder_block
-
-    def define_decoder_block(self, in_chan, out_chan, dropout=True):
-        """Defines a decoder block for the Pix2Pix GAN.
-
-        Args:
-             in_chan: The number of input channels.
-             n_filters: The number of output channels.
-             dropout: Whether to use dropout.
-
-        Returns:
-             The decoder block.
-        """
-        # Create a list to store the layers of the decoder block.
-        layers = []
-        # Add the transposed convolutional layer with the specified number of in channels and out channels.
-        g = nn.ConvTranspose2d(
-            in_chan, out_chan, (4, 4), stride=(2, 2), padding=1, bias=False
-        )
-        # Initalize the weight of the ConvtTranspose2d layer.
-        nn.init.normal_(g.weight, mean=0.0, std=0.02)
-        layers.append(g)
-        # Using batch norm for every block
-        g = nn.BatchNorm2d(out_chan)
-        layers.append(g)
-        # Conditionally add a dropout layer because it does not require every decoder block.
-        if dropout:
-            g = nn.Dropout(0.5)
-            layers.append(g)
-        return nn.Sequential(*layers)
+    def normal_weight_init(self, mean=0.0, std=0.02):
+        for m in self.children():
+            if isinstance(m, ConvBlock):
+                torch.nn.init.normal(m.conv.weight, mean, std)
+            if isinstance(m, DeconvBlock):
+                torch.nn.init.normal(m.deconv.weight, mean, std)
