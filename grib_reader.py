@@ -59,16 +59,26 @@ def norm(values):
 
 
 def create_product(target_date):
-    t_a, lat, lon = extract(target_date, "t", 3)
-    t_b, lat, lon = extract(target_date, "t", 4)
-    # w, lat, lon = extract(target_date, "w", 2)
-    cc, lat, lon = extract(target_date, "cc", 3)
-    q, lat, lon = extract(target_date, "q", 3)
-    # d, lat, lon = extract(target_date, "d", 3)
-    clwc, lat, lon = extract(target_date, "clwc", 3)
-    r = abs(t_a - t_b) * (clwc * 0.1)  # 850 hPa temp
-    g = q
-    b = cc
+    u_wind, lat, lon = extract(target_date, "u", 0)
+    v_wind, lat, lon = extract(target_date, "v", 0)
+    wind_speed = np.sqrt(u_wind**2+v_wind**2)
+    
+    hum_2, lat, lon = extract(target_date, "q", 2)
+    hum_3, lat, lon = extract(target_date, "q", 3)
+    hum_4, lat, lon = extract(target_date, "q", 4)
+    abs_humidity = np.maximum.reduce([hum_2, hum_3, hum_4])
+    
+    clouds, lat, lon = extract(target_date, "cc", 4)
+    water_content, lat, lon = extract(target_date, "clwc", 5)
+    cloud_composite = clouds+(water_content*2)
+    
+    temperature, lat, lon = extract(target_date, "t", 4)
+    temperature_median = np.median(temperature)
+    temperature[(temperature > temperature_median-1.5) & (temperature < temperature_median+1.5)] = 300
+    
+    r = wind_speed
+    g = temperature*abs_humidity
+    b = cloud_composite
 
     r = norm(r)
     g = norm(g)
@@ -82,7 +92,7 @@ def create_product_v1(target_date):
 
 
 def mkimg(
-    front_file,
+    front_file="",
     enable_map=True,
     enable_data=True,
     enable_fronts=True,
@@ -90,17 +100,20 @@ def mkimg(
     save_as="",
     custom_creator=create_product,
     custom_text="FPP",
+    custom_datetime=None
 ):
-    try:
-        f = open(front_file)
-        geojson_data = geojson.load(f)
-    except:
-        print(f"Cannot open {front_file}")
-        return False
-    meta = geojson_data["properties"]
-    target_date = datetime.fromtimestamp(meta["datetime"])
+    if(front_file!=""):
+        try:
+            f = open(front_file)
+            geojson_data = geojson.load(f)
+        except:
+            print(f"Cannot open {front_file}")
+            return False
+        meta = geojson_data["properties"]
+        target_date = datetime.fromtimestamp(meta["datetime"])
+    else:
+        target_date = custom_datetime
     # target_date = datetime(2021, 5, 17, 12)
-    print(f"Metadata: {meta}")
     limits = [-55.0, 30.0, 53.0, 80.0]
     # SN, NE, SN, NE, SN
     map = Basemap(
@@ -150,7 +163,7 @@ def mkimg(
         fdate = target_date.strftime("%Y-%m-%d %H UTC")
         plt.title(f"{custom_text} ({fdate})")
 
-    # image = georaster.SingleBandRaster( "/home/pavel/frontanim/datasets/generated_nooverlay/tif/01_01_2017.tif", latlon=False)
+    # image = georaster.SingleBandRaster( "datasets/generated_nooverlay/tif/01_01_2017.tif", latlon=False)
     # plt.imshow(image.r, extent=image.extent, zorder=10, alpha=0.6)
     if save_as == "":
         plt.show()
@@ -166,12 +179,13 @@ def mkimg(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create NWP model data image")
-    parser.add_argument("input", help="Input file path")
-    parser.add_argument("--save", help="Save generated image as")
+    parser.add_argument("--source", help="Input file path")
+    parser.add_argument("--save", type=argparse.FileType('wb'), help="Save generated image as")
     parser.add_argument("--fronts", action="store_true", help="Show front overlay")
     parser.add_argument("--nodata", action="store_true", help="Do not show data layer")
     parser.add_argument("--map", action="store_true", help="Show map layer")
     parser.add_argument("--header", action="store_true", help="Show plot header")
+    parser.add_argument("--date", help="Load from datasets by given datetime in format YYYY-MM-DD-HH")
     args = parser.parse_args()
 
     if args.save:
@@ -181,14 +195,21 @@ if __name__ == "__main__":
         target_file = ""
         header = True
 
+    dt = None
+    if args.date:
+        dt = datetime.strptime(args.date, "%Y-%m-%d-%H")
+        args.fronts = False
+        args.source = ""
+        
     mkimg(
-        args.input,
+        args.source,
         enable_header=header,
         enable_map=args.map,
         enable_fronts=args.fronts,
         save_as=target_file,
         enable_data=not args.nodata,
+        custom_datetime=dt
     )
-    # mkimg(args.input, enable_header=True) #human analyse
-    # mkimg(args.input, enable_map=False, enable_fronts=False, save_as="bbb.png") #to ML - model data
-    # mkimg(args.input, enable_data=False, enable_map=False, save_as="aaa.png") #to ML - front lines
+    # mkimg(args.source, enable_header=True) #human analyse
+    # mkimg(args.source, enable_map=False, enable_fronts=False, save_as="bbb.png") #to ML - model data
+    # mkimg(args.source, enable_data=False, enable_map=False, save_as="aaa.png") #to ML - front lines

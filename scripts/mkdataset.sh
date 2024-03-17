@@ -26,11 +26,11 @@ for filename in $geojson_files; do
     echo "Processing $filename..."
     
     if [[ ! -f "$data_file" || ( -f "$data_file" && ! $skip_existing ) ]]; then
-        ./grib_reader.py "$filename" --save "$data_file"
+        ./grib_reader.py --source "$filename" --save "$data_file"
     fi
     
     if [[ ! -f "$fronts_file" || ( -f "$fronts_file" && ! $skip_existing ) ]]; then
-        ./grib_reader.py "$filename" --fronts --nodata --save "$fronts_file"
+        ./grib_reader.py --source "$filename" --fronts --nodata --save "$fronts_file"
     fi
 done
 
