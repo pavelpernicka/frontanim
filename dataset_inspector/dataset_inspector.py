@@ -421,10 +421,13 @@ class SimpleApp(Gtk.Window):
 
     def list_included_items(self):
         included_items = []
+        excluded_items = []
         for row in self.liststore:
             if row[1]:
                 included_items.append(row[0])
-        return included_items
+            else:
+                excluded_items.append(row[0])
+        return included_items, excluded_items
 
     def save_ds(self, folder):
         print("Saving dataset") 
@@ -436,7 +439,7 @@ class SimpleApp(Gtk.Window):
             percentage = 0
         dialog.destroy()
         print("Test dataset percentage:", percentage)
-        train_dataset = self.list_included_items()
+        train_dataset, excluded = self.list_included_items()
         test_dataset = random.sample(train_dataset, k=int(len(train_dataset) * int(percentage) / 100))
         total = len(train_dataset)
         progress = 0
@@ -444,6 +447,10 @@ class SimpleApp(Gtk.Window):
         for dst in ["/fronts-test", "/fronts", "/data", "/data-test"]:
             if not os.path.exists(folder + dst):
                 os.makedirs(folder + dst)
+        f = open(folder + "/exclude.list", "w")
+        for item in excluded:
+            f.write(os.path.splitext(item)[0] + "\n")
+        f.close()
         for file in test_dataset:
             train_dataset.remove(file)
             fraction = progress / total
