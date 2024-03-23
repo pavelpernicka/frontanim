@@ -9,7 +9,7 @@ import netCDF4 as netcdf
 import numpy as np
 from mpl_toolkits.basemap import Basemap
 
-from colors import chmi_colors, front_names
+from colors import chmi_colors, colors, front_names
 
 
 def extract(date, variable_name, level_id):
@@ -57,28 +57,82 @@ def norm(values):
     normalized_data = (values - min_val) / (max_val - min_val)
     return normalized_data
 
+"""
+def create_product(target_date):
+    t_a, lat, lon = extract(target_date, "t", 3)
+    t_b, lat, lon = extract(target_date, "t", 4)
+    # w, lat, lon = extract(target_date, "w", 2)
+    cc, lat, lon = extract(target_date, "cc", 3)
+    q, lat, lon = extract(target_date, "q", 3)
+    # d, lat, lon = extract(target_date, "d", 3)
+    clwc, lat, lon = extract(target_date, "clwc", 3)
+    r = abs(t_a - t_b) * (clwc * 0.1)  # 850 hPa temp
+    g = q
+    b = cc
+
+    r = norm(r)
+    g = norm(g)
+    b = norm(b)
+    return (np.stack((r, g, b), axis=-1), lat, lon)
+"""
+def calculate_frontogenesis(temperature):
+    dx = 1.0  # Assume grid spacing in x direction
+    dy = 1.0  # Assume grid spacing in y direction
+    
+    dTx_dy = np.gradient(temperature, axis=0) / dy  # Partial derivative of temperature gradient in y direction
+    dTy_dx = np.gradient(temperature, axis=1) / dx  # Partial derivative of temperature gradient in x direction
+    
+    d2Tx_dy2 = np.gradient(dTx_dy, axis=0) / dy  # Second partial derivative of temperature gradient in y direction
+    d2Ty_dx2 = np.gradient(dTy_dx, axis=1) / dx  # Second partial derivative of temperature gradient in x direction
+    
+    frontogenesis = -d2Tx_dy2 + d2Ty_dx2
+    
+    return frontogenesis
+
+def calculate_potential_vorticity(u, v, temperature):
+    # Calculate potential vorticity
+    # This is a simplified calculation assuming a constant potential temperature gradient
+    dx = 1.0  # Assume grid spacing in x direction
+    dy = 1.0  # Assume grid spacing in y direction
+    dT_dy = np.gradient(temperature, axis=0) / dy
+    dT_dx = np.gradient(temperature, axis=1) / dx
+    dU_dx = np.gradient(u, axis=1) / dx
+    dV_dy = np.gradient(v, axis=0) / dy
+    PV = (1 / temperature) * (dV_dy - dU_dx) + (9.8 / temperature) * (dT_dx * v - dT_dy * u)
+    return PV
 
 def create_product(target_date):
     u_wind, lat, lon = extract(target_date, "u", 0)
     v_wind, lat, lon = extract(target_date, "v", 0)
     wind_speed = np.sqrt(u_wind**2+v_wind**2)
     
+    #hum_1, lat, lon = extract(target_date, "q", 1)
     hum_2, lat, lon = extract(target_date, "q", 2)
-    hum_3, lat, lon = extract(target_date, "q", 3)
-    hum_4, lat, lon = extract(target_date, "q", 4)
-    abs_humidity = np.maximum.reduce([hum_2, hum_3, hum_4])
+    #hum_3, lat, lon = extract(target_date, "q", 3)
+    #hum_4, lat, lon = extract(target_date, "q", 4)
+    #abs_humidity = np.maximum.reduce([hum_2, hum_3, hum_4])
     
-    clouds, lat, lon = extract(target_date, "cc", 4)
-    water_content, lat, lon = extract(target_date, "clwc", 5)
-    cloud_composite = clouds+(water_content*2)
+    #clouds, lat, lon = extract(target_date, "cc", 0)
+    #water_content, lat, lon = extract(target_date, "clwc", 5)
+    #cloud_composite = clouds+(water_content*2)
     
-    temperature, lat, lon = extract(target_date, "t", 4)
-    temperature_median = np.median(temperature)
-    temperature[(temperature > temperature_median-1.5) & (temperature < temperature_median+1.5)] = 300
+    temp1, lat, lon = extract(target_date, "t", 1)
+    #temp2, lat, lon = extract(target_date, "t", 2)
+    #temp3, lat, lon = extract(target_date, "t", 3)
+    temp4, lat, lon = extract(target_date, "t", 4)
+    #temp5, lat, lon = extract(target_date, "t", 5)
+    #temperature_3d = np.stack((temp1, temp2, temp3, temp4, temp5), axis=-1)
+    #thermal_gradient = np.gradient(temperature_3d, axis=2)
     
-    r = wind_speed
-    g = temperature*abs_humidity
-    b = cloud_composite
+    frontogenesis = calculate_frontogenesis(hum_2) # best subjective choice
+    pv = calculate_potential_vorticity(u_wind, v_wind, temp1)
+    #temperature = temp4
+    #temperature_median = np.median(temperature)
+    #temperature[(temperature > temperature_median-1.5) & (temperature < temperature_median+1.5)] = 250
+    
+    r = pv
+    g = (1-frontogenesis)*wind_speed #1-np.amax(thermal_gradient, axis=2)
+    b = temp4
 
     r = norm(r)
     g = norm(g)
@@ -151,7 +205,7 @@ def mkimg(
         # plot GeoJSON features
         for feature in geojson_data["features"]:
             front_type_id = front_names.index(feature["properties"]["front_type"])
-            color = tuple(chmi_colors[front_type_id] / 255)
+            color = tuple(colors[front_type_id] / 255)
             if feature["geometry"]["type"] == "LineString":
                 coordinates = feature["geometry"]["coordinates"]
                 lon = [point[0] for point in coordinates]
