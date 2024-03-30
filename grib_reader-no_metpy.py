@@ -2,14 +2,56 @@
 import argparse
 import os
 from datetime import datetime
-import metpy.calc as mpcalc
-from metpy.units import units
+
 import geojson
 import matplotlib.pyplot as plt
-import xarray as xr
+import netCDF4 as netcdf
 import numpy as np
 from mpl_toolkits.basemap import Basemap
+
 from colors import chmi_colors, colors, front_names
+debug = False
+    
+def extract(date, variable_name, level):
+    file = f"datasets/ecmwf/netcdf/era5_{date.year}.nc"
+    if os.path.isfile(file):
+        data = netcdf.Dataset(file, mode="r")  # read the data
+
+        times = data.variables["time"]
+        levels = data.variables["level"][:]
+        lat = data.variables["latitude"][:]
+        lon = data.variables["longitude"][:]
+        variables = dict(data.variables)
+
+        if debug:
+            print(f"Available data: {variables}")
+            print(f"Pressure levels: {levels}")
+
+        if variable_name in variables:
+            variable = data.variables[variable_name]
+        else:
+            print("Key not found, trying _001 variant.")
+            variable = data.variables[variable_name + "_0001"]
+
+        # print('units = %s, values = %s' % (times.units, times[:]))
+
+        dates = netcdf.num2date(times[:], times.units)
+        # print([date.strftime('%Y-%m-%d %H:%M:%S') for date in dates[:10]])
+        ntime = netcdf.date2index(date, times, select="nearest")
+        print(f"choosed #{ntime} ({dates[ntime]})")
+        print(f"unit: {variable.units}")
+        if level == None:
+            final = variable[ntime, :, :, :]
+            return (final, lat, lon, levels)
+        else:
+            level_id = np.abs(levels - level).argmin()
+            final = variable[ntime, level_id, :, :]
+            return (final, lat, lon)
+        data.close()
+    else:
+        print(f"Dataset file not found: {file}")
+        return ([], [], [])
+
 
 def norm(values):
     # to floats 0-1
@@ -24,77 +66,87 @@ def lognorm(array):
     normalized_array = (log_array - np.min(log_array)) / (np.max(log_array) - np.min(log_array))
     return normalized_array
 
-def custom_normalize(arr):
-    # Replace NaN values with zeros
-    arr = np.nan_to_num(arr)
-    
-    # Find the minimum and maximum values, excluding NaNs
-    min_val = np.nanmin(arr)
-    max_val = np.nanmax(arr)
-    # Handle the case where min and max are the same (i.e., all values are zeros or NaNs)
-    if min_val == max_val:
-        # If all values are zeros or NaNs, return the array itself
-        return arr
-    
-    # Normalize the array to the range [0, 1]
-    normalized_arr = (arr - min_val) / (max_val - min_val)
-    
-    return normalized_arr
+"""
+def create_product(target_date):
+    t_a, lat, lon = extract(target_date, "t", 3)
+    t_b, lat, lon = extract(target_date, "t", 4)
+    # w, lat, lon = extract(target_date, "w", 2)
+    cc, lat, lon = extract(target_date, "cc", 3)
+    q, lat, lon = extract(target_date, "q", 3)
+    # d, lat, lon = extract(target_date, "d", 3)
+    clwc, lat, lon = extract(target_date, "clwc", 3)
+    r = abs(t_a - t_b) * (clwc * 0.1)  # 850 hPa temp
+    g = q
+    b = cc
 
+    r = norm(r)
+    g = norm(g)
+    b = norm(b)
+    return (np.stack((r, g, b), axis=-1), lat, lon)
+"""
+def calculate_frontogenesis(temperature):
+    dx = 1.0  # Assume grid spacing in x direction
+    dy = 1.0  # Assume grid spacing in y direction
+    
+    dTx_dy = np.gradient(temperature, axis=0) / dy  # Partial derivative of temperature gradient in y direction
+    dTy_dx = np.gradient(temperature, axis=1) / dx  # Partial derivative of temperature gradient in x direction
+    
+    d2Tx_dy2 = np.gradient(dTx_dy, axis=0) / dy  # Second partial derivative of temperature gradient in y direction
+    d2Ty_dx2 = np.gradient(dTy_dx, axis=1) / dx  # Second partial derivative of temperature gradient in x direction
+    
+    frontogenesis = -d2Tx_dy2 + d2Ty_dx2
+    
+    return frontogenesis
+
+def calculate_potential_vorticity(u, v, temperature):
+    # Calculate potential vorticity
+    # This is a simplified calculation assuming a constant potential temperature gradient
+    dx = 1.0  # Assume grid spacing in x direction
+    dy = 1.0  # Assume grid spacing in y direction
+    dT_dy = np.gradient(temperature, axis=0) / dy
+    dT_dx = np.gradient(temperature, axis=1) / dx
+    dU_dx = np.gradient(u, axis=1) / dx
+    dV_dy = np.gradient(v, axis=0) / dy
+    PV = (1 / temperature) * (dV_dy - dU_dx) + (9.8 / temperature) * (dT_dx * v - dT_dy * u)
+    return PV
 
 def create_product(target_date):
-    file = f"datasets/ecmwf/netcdf/era5_{target_date.year}.nc"
-    ds = xr.open_dataset(file).metpy.parse_cf()
+    u_wind, lat, lon = extract(target_date, "u", 350)
+    v_wind, lat, lon = extract(target_date, "v", 350)
+    wind_speed = np.sqrt(u_wind**2+v_wind**2)
     
-    lats = ds.latitude.sel().values
-    lons = ds.longitude.sel().values
-    print(ds)
+    #hum_1, lat, lon = extract(target_date, "q", 1)
+    hum_2, lat, lon = extract(target_date, "q", 650)
+    #hum_3, lat, lon = extract(target_date, "q", 3)
+    #hum_4, lat, lon = extract(target_date, "q", 4)
+    #abs_humidity = np.maximum.reduce([hum_2, hum_3, hum_4])
     
-    frontogenesis_level = 850 * units.hPa
-    jetstream_level = 300 * units.hPa
+    #clouds, lat, lon = extract(target_date, "cc", 0)
+    #water_content, lat, lon = extract(target_date, "clwc", 5)
+    #cloud_composite = clouds+(water_content*2)
     
-    pres = ds['level'].values[:] * units('hPa')
-    t = ds['t'].metpy.sel(method='nearest', time=target_date)
-    u = ds['v'].metpy.sel(method='nearest', time=target_date)
-    v = ds['u'].metpy.sel(method='nearest', time=target_date)
-    q_850 = ds['q'].metpy.sel(level=frontogenesis_level, method='nearest', time=target_date).metpy.unit_array.squeeze()
-
-    dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
-
-    potential_temperature = mpcalc.potential_temperature(pres[:, None, None] , t)
-    u_300 = u.sel(level=jetstream_level, method='nearest').metpy.unit_array.squeeze()
-    v_300 = v.sel(level=jetstream_level, method='nearest').metpy.unit_array.squeeze()
-    u_850 = u.sel(level=frontogenesis_level, method='nearest').metpy.unit_array.squeeze()
-    v_850 = v.sel(level=frontogenesis_level, method='nearest').metpy.unit_array.squeeze()
-    t_850 = t.sel(level=frontogenesis_level, method='nearest').metpy.unit_array.squeeze()
-    potential_temperature_850 = mpcalc.potential_temperature(850 * units("hPa") , t_850)
-    temperature_celsius_850 = t_850.to('degC')
-    wind_speed_300 = mpcalc.wind_speed(u_300, v_300)
-
-    #humidity_gradient_raw = mpcalc.gradient(q_850, coordinates=(lats, lons))
-    #humidity_gradient = np.sqrt(humidity_gradient_raw[0]**2 + humidity_gradient_raw[1]**2)
-    hum_mask = (q_850.m > 0.0025)
-
-    #temperature_gradient_raw = mpcalc.gradient(q_850, coordinates=(lats, lons))
-    #temperature_gradient = np.sqrt(temperature_gradient_raw[0]**2 + temperature_gradient_raw[1]**2)
-
-    potential_vorticity = mpcalc.potential_vorticity_baroclinic(potential_temperature, pres[:, None, None], u, v, dx[None, :, :], dy[None, :, :], lats[None, :, None] * units('degrees')).sel(level=300 * units("hPa"), method='nearest')
-    frontogenesis_850 = mpcalc.frontogenesis(potential_temperature_850, u_850, v_850, dx, dy)*1000*100*3600*3
-
-    #u_qvect, v_qvect = mpcalc.q_vector(u_850, v_850, t_850, frontogenesis_level, dx, dy)
-    #lengthq = np.sqrt(u_qvect**2 + v_qvect**2)
+    temp1, lat, lon = extract(target_date, "t", 550)
+    #temp2, lat, lon = extract(target_date, "t", 2)
+    #temp3, lat, lon = extract(target_date, "t", 3)
+    temp4, lat, lon = extract(target_date, "t", 850)
+    #temp5, lat, lon = extract(target_date, "t", 5)
+    #temperature_3d = np.stack((temp1, temp2, temp3, temp4, temp5), axis=-1)
+    #thermal_gradient = np.gradient(temperature_3d, axis=2)
     
-    #t_advection = mpcalc.advection(t_850, u_850, v_850, dx=dx, dy=dy)
-    a = abs(frontogenesis_850.m*hum_mask)
-    a[a>5] = 5
-    r = a + np.array(potential_vorticity)
-    g = np.array(potential_temperature_850.m)
-    b = wind_speed_300.m
+    frontogenesis = calculate_frontogenesis(hum_2) # best subjective choice
+    pv = calculate_potential_vorticity(u_wind, v_wind, temp1)
+    #temperature = temp4
+    #temperature_median = np.median(temperature)
+    #temperature[(temperature > temperature_median-1.5) & (temperature < temperature_median+1.5)] = 250
     
-    r = custom_normalize(r)
-    g = custom_normalize(g)
-    b = custom_normalize(b)
-    return (np.stack((r, g, b), axis=-1), lats, lons)
+    r = pv
+    g = (1-frontogenesis)*wind_speed #1-np.amax(thermal_gradient, axis=2)
+    b = temp4
+
+    r = norm(r)
+    g = norm(g)
+    b = norm(b)
+    return (np.stack((r, g, b), axis=-1), lat, lon)
 
 
 def create_product_v1(target_date):

@@ -15,30 +15,19 @@ def colorise_fronts(image):
     return output
 
 
-def extract_colors(image, color_definition=chmi_colors, tollerance=50):
+def extract_colors(image, color_definition=chmi_colors, tolerance=50):
     fronts = []
-
-    # extract fronts by color from mask
-    fronts.append(
-        cv.inRange(
-            image, color_definition[0] - tollerance, color_definition[0] + tollerance
+    # extract fronts by color, create mask
+    for colord in color_definition:
+        fronts.append(
+            cv.inRange(
+                image, colord - tolerance, colord + tolerance
+            )
         )
-    )
-    fronts.append(
-        cv.inRange(
-            image, color_definition[1] - tollerance, color_definition[1] + tollerance
-        )
-    )
-    fronts.append(
-        cv.inRange(
-            image, color_definition[2] - tollerance, color_definition[2] + tollerance
-        )
-    )
-
     return fronts
 
 
-def extract_front_line(mask_in):
+def extract_front_line(mask_in, nr_iterations=10):
     skeleton_new = np.zeros_like(mask_in)
     num_labels, labels = cv.connectedComponents(mask_in)
     # must skeletonize each chunk of fronts individually, otherwise e.g. secondary front will be connected with main front
@@ -58,7 +47,7 @@ def extract_front_line(mask_in):
         skeleton = cv.ximgproc.thinning(mask, 1)
         skeleton_erodet = np.copy(skeleton)
 
-        for i in range(10):
+        for i in range(nr_iterations):
             skeleton_erodet = cv.dilate(skeleton_erodet, kernel1, iterations=1)
             skeleton_erodet = cv.erode(skeleton_erodet, kernel2, iterations=1)
 

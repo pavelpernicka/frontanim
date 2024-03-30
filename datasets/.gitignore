@@ -3,5 +3,4 @@ synoptic_forecasted_original/*
 generated_nooverlay
 generated_overlay
 generated_model_*
-generated_model/data/*
-generated_model/fronts/*
+generated_model-*
